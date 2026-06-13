@@ -1,9 +1,9 @@
 /*
-   A single stb style header Qt plugin hot-reloader for windows
+   A single header Qt plugin hot-reloader for windows
 
    how to use:
    1. include this header anywhere you need to reference this class.
-   2. in EXACTLY ONE .cpp file, define D_HOT_LOADER_IMPLEMENTATION before
+   2. in exactly one .cpp file, define D_HOT_LOADER_IMPLEMENTATION before
    including.
 */
 
@@ -20,9 +20,9 @@
 #include <QPluginLoader>
 #include <QString>
 #include <QThread>
+#include <functional>
 
 class DHotLoader : public QObject {
-  Q_OBJECT
 
 public:
   explicit DHotLoader(QObject *parent = nullptr);
@@ -37,14 +37,9 @@ public:
   // returns the active plugin instance
   QObject *instance() const;
 
-signals:
-  // emitted when a new dll is compiled and successfully hot-swapped
-  void pluginReload(QObject *newInstance);
-  // emitted is a reload fails
-  void pluginReloadFailed(const QString &errorMessage);
-
-private slots:
-  void onDllChanged(const QString &path);
+  // replaces qt signals with standard cpp callbacks
+  std::function<void(QObject *)> onPluginReload;
+  std::function<void(QString)> onPluginReloadFailed;
 
 private:
   QString m_originalPath;
@@ -54,6 +49,7 @@ private:
 
   QString generateShadowPath(const QString &originalPath);
   void cleanupOldShadows(const QString &originalPath);
+  void handleDllChanged(const QString &path);
 };
 
 #endif // !D_HOT_LOADER_H
@@ -65,7 +61,7 @@ DHotLoader::DHotLoader(QObject *parent)
     : QObject(parent), m_loader(nullptr),
       m_watcher(new QFileSystemWatcher(this)) {
   connect(m_watcher, &QFileSystemWatcher::fileChanged, this,
-          &DHotLoader::onDllChanged);
+          [this](const QString &path) { this->handleDllChanged(path); });
 }
 
 DHotLoader::~DHotLoader() { unload(); }
@@ -129,7 +125,7 @@ QObject *DHotLoader::instance() const {
   return nullptr;
 }
 
-void DHotLoader::onDllChanged(const QString &path) {
+void DHotLoader::handleDllChanged(const QString &path) {
   if (path != m_originalPath)
     return;
   qDebug() << "[DHotLoader] File change detected! Initiating hot-swap for:"
@@ -141,9 +137,11 @@ void DHotLoader::onDllChanged(const QString &path) {
   unload();
 
   if (load(m_originalPath)) {
-    emit pluginReload(instance());
+    if (onPluginReload)
+      onPluginReload(instance());
   } else {
-    emit pluginReloadFailed("Failed to hot-swap plugin.");
+    if (onPluginReloadFailed)
+      onPluginReloadFailed("Failed to hot-swap plugin.");
   }
 }
 
